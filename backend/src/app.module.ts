@@ -9,8 +9,20 @@ import { PostModule } from './post/post.module';
 import { Post } from './post/post.entity';
 import { CommentModule } from './comment/comment.module';
 import { Comment } from './comment/comment.entity';
+import { TrelloBoard } from './trello-board/trello-board.entity';
+import { TrelloList } from './trello-list/trello-list.entity';
+import { TrelloCard } from './trello-card/trello-card.entity';
+import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { APP_GUARD } from '@nestjs/core';
+import { TrelloBoardModule } from './trello-board/trello-board.module';
+import { TrelloListModule } from './trello-list/trello-list.module';
+import { TrelloCardModule } from './trello-card/trello-card.module';
 @Module({
   imports: [
+    ThrottlerModule.forRoot([{
+      ttl: 10000,
+      limit: 100,
+    }]),
     ConfigModule.forRoot({
       isGlobal: true,
     }),
@@ -31,7 +43,7 @@ import { Comment } from './comment/comment.entity';
           username: configService.get('DB_USERNAME'),
           password: configService.get('DB_PASSWORD'),
           database: configService.get('DB_DATABASE'),
-          entities: [User, Post, Comment],
+          entities: [User, Post, Comment, TrelloBoard, TrelloList, TrelloCard],
           synchronize: true,
         };
       },
@@ -43,8 +55,20 @@ import { Comment } from './comment/comment.entity';
     PostModule,
 
     CommentModule,
+
+    TrelloBoardModule,
+
+    TrelloListModule,
+
+    TrelloCardModule,
   ],
   controllers: [AppController],
-  providers: [AppService],
+  providers: [
+    AppService,
+    {
+      provide: APP_GUARD,
+      useClass: ThrottlerGuard,
+    },
+  ],
 })
 export class AppModule {}

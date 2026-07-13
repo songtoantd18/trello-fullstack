@@ -6,6 +6,8 @@ import DashboardPage from "../page/dashboardPage.vue";
 import config from "../ultilies/config";
 import CommentPage from "../page/commentPage.vue";
 import ComponentOng from "@/page/ComponentOng.vue";
+import LandingPage from "../page/LandingPage.vue";
+import TrelloBoard from "../page/TrelloBoard.vue";
 
 const routes = [
   { path: "/login", component: LoginPage },
@@ -19,7 +21,12 @@ const routes = [
     component: DashboardPage,
     meta: { requiresAuth: true }, // cần đăng nhập
   },
-  { path: "/", redirect: "/login" },
+  {
+    path: "/trello",
+    component: TrelloBoard,
+    // meta: { requiresAuth: true }, // Tạm thời tắt auth để test UI
+  },
+  { path: "/", component: LandingPage },
 ];
 
 const router = createRouter({
