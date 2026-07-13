@@ -1,0 +1,1271 @@
+import { Test, TestingModule } from '@nestjs/testing';
+import { AppController } from './app.controller';
+import { AppService } from './app.service';
+
+describe('AppController', () => {
+  let appController: AppController;
+
+  beforeEach(async () => {
+    const app: TestingModule = await Test.createTestingModule({
+      controllers: [AppController],
+      providers: [AppService],
+    }).compile();
+
+    appController = app.get<AppController>(AppController);
+  });
+
+  describe('root', () => {
+    it('should return "Hello World!"', () => {
+      expect(appController.getHello()).toBe('Hello World!');
+    });
+  });
+});
+import { Controller, Get } from '@nestjs/common';
+import { AppService } from './app.service';
+
+@Controller()
+export class AppController {
+  // cái này là dependency injection
+  constructor(private readonly appService: AppService) {}
+
+  @Get()
+  getHello(): string {
+    return this.appService.getHello();
+  }
+  @Get('/test')
+  sayhi() {
+    console.log('đây là controller111111');
+    return this.appService.sayhi();
+  }
+}
+import { Module } from '@nestjs/common';
+import { AppController } from './app.controller';
+import { AppService } from './app.service';
+import { TypeOrmModule } from '@nestjs/typeorm';
+import { User } from './user/user.entity';
+import { UserModule } from './user/user.module';
+import { ConfigModule, ConfigService } from '@nestjs/config';
+import { PostModule } from './post/post.module';
+import { Post } from './post/post.entity';
+import { CommentModule } from './comment/comment.module';
+import { Comment } from './comment/comment.entity';
+@Module({
+  imports: [
+    ConfigModule.forRoot({
+      isGlobal: true,
+    }),
+
+    TypeOrmModule.forRootAsync({
+      imports: [ConfigModule],
+      useFactory: (configService: ConfigService) => {
+        console.log(configService.get('DB_HOST'));
+        console.log(configService.get('DB_PORT'));
+        console.log(configService.get('DB_USERNAME'));
+        console.log(configService.get('DB_PASSWORD'));
+        console.log(configService.get('DB_DATABASE'));
+
+        return {
+          type: 'mysql',
+          host: configService.get('DB_HOST'),
+          port: +configService.get('DB_PORT'),
+          username: configService.get('DB_USERNAME'),
+          password: configService.get('DB_PASSWORD'),
+          database: configService.get('DB_DATABASE'),
+          entities: [User, Post, Comment],
+          synchronize: true,
+        };
+      },
+      inject: [ConfigService],
+    }),
+
+    UserModule,
+
+    PostModule,
+
+    CommentModule,
+  ],
+  controllers: [AppController],
+  providers: [AppService],
+})
+export class AppModule {}
+import { Injectable } from '@nestjs/common';
+
+@Injectable()
+export class AppService {
+  getHello(): string {
+    return 'Hello World!';
+  }
+  sayhi() {
+    console.log('đây là service2222222');
+    return 'đang chạy test';
+  }
+}
+import { Controller, Post, Body, Get, Param, UseGuards } from '@nestjs/common';
+import { CommentService } from './comment.service';
+import { CreateCommentDto } from './dto/create-comment.dto';
+import { CurrentUser } from '../user/decorate/user.decorator';
+import { User } from '../user/user.entity';
+import { AuthGuard } from '../user/guards/auth.guard';
+import { ShowAllCommentDto } from './dto/showAllComment.dto';
+
+@Controller('comment')
+export class CommentController {
+  constructor(private readonly commentService: CommentService) {}
+
+  @Post()
+  @UseGuards(AuthGuard)
+  create(
+    @Body() createCommentDto: CreateCommentDto,
+    @CurrentUser() currentUser: User,
+  ) {
+    console.log('đây là commentcontroller');
+    console.log(currentUser);
+    console.log(createCommentDto);
+
+    return this.commentService.createComment(createCommentDto, currentUser);
+  }
+
+  @Get('post/:postId')
+  @UseGuards(AuthGuard)
+  findAllByPost(@Param('postId') postId: number) {
+    return this.commentService.findAllByPost(postId);
+  }
+  @Get('all')
+  @UseGuards(AuthGuard)
+  showAllComment(): Promise<ShowAllCommentDto[]> {
+    return this.commentService.findAll();
+  }
+}
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  ManyToOne,
+  CreateDateColumn,
+  UpdateDateColumn,
+} from 'typeorm';
+import { Post } from '../post/post.entity'; // Import Post entity
+import { User } from '../user/user.entity';
+
+@Entity()
+export class Comment {
+  @PrimaryGeneratedColumn()
+  id: number;
+
+  @Column()
+  content: string;
+
+  @ManyToOne(() => Post, (post) => post.comments) // Quan hệ ngược lại với Post
+  post: Post;
+
+  @ManyToOne(() => User, (user) => user.comments)
+  user: User;
+  @Column()
+  @CreateDateColumn()
+  created_at: Date; // Creation date
+
+  @UpdateDateColumn()
+  updated_at: Date; // Last updated date
+}
+import { Module } from '@nestjs/common';
+import { CommentController } from './comment.controller';
+import { CommentService } from './comment.service';
+import { Comment } from './comment.entity';
+import { TypeOrmModule } from '@nestjs/typeorm';
+import { Post } from 'src/post/post.entity';
+import { UserModule } from 'src/user/user.module';
+
+@Module({
+  imports: [TypeOrmModule.forFeature([Comment, Post]), UserModule],
+
+  controllers: [CommentController],
+  providers: [CommentService],
+})
+export class CommentModule {}
+import { Injectable } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { Comment } from './comment.entity';
+import { Post } from '../post/post.entity';
+import { User } from '../user/user.entity';
+import { CreateCommentDto } from './dto/create-comment.dto';
+import { CommentResponseDto } from './dto/comment-response.dto';
+import { ShowAllCommentDto } from './dto/showAllComment.dto';
+@Injectable()
+export class CommentService {
+  constructor(
+    @InjectRepository(Comment)
+    private commentRepository: Repository<Comment>,
+    @InjectRepository(Post)
+    private postsRepository: Repository<Post>,
+  ) {}
+
+  async createComment(
+    createCommentDto: CreateCommentDto,
+    currentUser: User,
+  ): Promise<CommentResponseDto> {
+    const { content, postId } = createCommentDto;
+
+    const post = await this.postsRepository.findOneBy({ id: postId });
+    if (!post) throw new Error('Post not found');
+
+    const comment = this.commentRepository.create({
+      content,
+      post,
+      user: currentUser,
+    });
+    const savedComment = await this.commentRepository.save(comment);
+    const commentReturn = {
+      content: savedComment.content,
+      postId: savedComment.post.id, // Lấy id từ object post
+      userId: savedComment.user.email, // Lấy id từ object user
+    };
+    return commentReturn;
+  }
+
+  async findAllByPost(postId: number): Promise<Comment[]> {
+    return this.commentRepository.find({
+      where: { post: { id: postId } },
+      select: {
+        id: true,
+        content: true,
+        created_at: true,
+        user: {
+          id: true,
+          email: true,
+          firstName: true,
+          lastName: true,
+        },
+        post: {
+          title: true,
+        },
+      },
+      relations: ['user', 'post'],
+      order: {
+        created_at: 'DESC',
+      },
+    });
+  }
+
+  async findAll(): Promise<ShowAllCommentDto[]> {
+    // Chỉ lấy các trường id, content, postId, userId
+    const comments = await this.commentRepository.find({
+      relations: ['post', 'user'],
+    });
+
+    return comments.map((comment) => ({
+      id: comment.id,
+      content: comment.content,
+      postId: comment.post.id,
+      userId: comment.user.id,
+    }));
+  }
+}
+export class CommentResponseDto {
+  content: string;
+  postId: number;
+  userId: string;
+}
+import { IsNotEmpty } from 'class-validator';
+
+export class CreateCommentDto {
+  @IsNotEmpty()
+  postId: number;
+  content: string;
+}
+// comment.dto.ts
+import { IsString, IsInt, IsOptional } from 'class-validator';
+
+export class ShowAllCommentDto {
+  @IsOptional()
+  @IsInt()
+  id: number;
+
+  @IsOptional()
+  @IsString()
+  content: string;
+
+  @IsOptional()
+  @IsInt()
+  postId: number;
+
+  @IsOptional()
+  @IsInt()
+  userId: number;
+}
+import { BadRequestException } from '@nestjs/common';
+import { User } from 'src/user/user.entity';
+
+export class Permission {
+  static checkPermission(id: number, currentUser: User) {
+  
+    console.log('🚀 ~ Permission ~ checkPermission ~ id:yyyyyyyyyyyyyyyyyyyyyyy', id);
+    console.log(
+      '🚀 ~ Permission ~ checkPermission ~ currentUser.id:yyyyyyyyyyyyyyyyyyyyyyyyyy',
+      currentUser.id,
+    );
+    if (currentUser.id === id) return;
+    if (currentUser.role === 'admin') return;
+
+    throw new BadRequestException(
+      'You do not have permission to access this resource',
+    );
+  }
+}
+import { NestFactory } from '@nestjs/core';
+import { AppModule } from './app.module';
+// import { ValidationPipe } from '@nestjs/common';
+
+async function bootstrap() {
+  const app = await NestFactory.create(AppModule);
+
+  // ✅ Bật CORS ở đây
+  app.enableCors({
+    origin: 'https://managerwork.vercel.app', // Chỉ cho phép origin này
+    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE', // Các phương thức được phép
+    credentials: true, // Cho phép gửi cookie (nếu cần)
+  });
+
+  // app.useGlobalPipes(new ValidationPipe());
+  await app.listen(process.env.PORT ?? 3000);
+}
+bootstrap();
+import { IsNotEmpty } from "class-validator";
+
+export class CreatePostDto {
+  @IsNotEmpty()
+  title: string;
+  description: string;
+}export class SelectPostDto {
+  conditions?: string; // JSON.stringify object điều kiện
+  columns?: string[]; // danh sách cột muốn lấy
+}
+import { Expose } from 'class-transformer';
+import { IsNotEmpty } from 'class-validator';
+
+export class UpdatePostDto {
+  @Expose()
+  id: number;
+
+  @Expose()
+  title: string;
+
+  @Expose()
+  description: string;
+
+  @Expose()
+  created_at: Date;
+
+  @Expose()
+  updated_at: Date;
+
+  @Expose()
+  userId: number;
+}
+import { Test, TestingModule } from '@nestjs/testing';
+import { PostController } from './post.controller';
+
+describe('PostController', () => {
+  let controller: PostController;
+
+  beforeEach(async () => {
+    const module: TestingModule = await Test.createTestingModule({
+      controllers: [PostController],
+    }).compile();
+
+    controller = module.get<PostController>(PostController);
+  });
+
+  it('should be defined', () => {
+    expect(controller).toBeDefined();
+  });
+});
+import {
+  Body,
+  ClassSerializerInterceptor,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  ParseIntPipe,
+  Post,
+  Put,
+  Query,
+  UseGuards,
+  UseInterceptors,
+} from '@nestjs/common';
+import { PostService } from './post.service';
+import { CreatePostDto } from './dto/createPost.dto';
+import { CurrentUser } from 'src/user/decorate/user.decorator';
+import { AuthGuard } from 'src/user/guards/auth.guard';
+import { User } from 'src/user/user.entity';
+import { UpdatePostDto } from './dto/updatePost.dto';
+import { SelectPostDto } from './dto/select-post.dto';
+
+@Controller('post')
+@UseInterceptors(ClassSerializerInterceptor)
+export class PostController {
+  constructor(private readonly postService: PostService) {}
+  @Get('')
+  getPost() {
+    return 'đây là post';
+  }
+  @Post('')
+  @UseGuards(AuthGuard)
+  createPost(
+    @Body() requestBody: CreatePostDto,
+    @CurrentUser() currentUser: User,
+  ) {
+    return this.postService.createPost(requestBody, currentUser);
+  }
+  /////////////////////////////
+  @Get('/select')
+  @UseGuards(AuthGuard)
+  async selectPost(@Query() dto: SelectPostDto) {
+    return this.postService.selectPosts(dto);
+  }
+
+  @Get('/all')
+  findAllPosts() {
+    console.log('đây là find all posts');
+    return this.postService.getAllPosts();
+  }
+  @Get('/:id')
+  findPostById(@Param('id', ParseIntPipe) id: number) {
+    console.log('🚀 ~ PostController ~ findPostById ~ id:', id);
+    return this.postService.getPostById(id);
+  }
+  @Get('/allposts/:id')
+  findAllPostsById(@Param('id', ParseIntPipe) id: number) {
+    console.log('đây là find all posts byid');
+    return this.postService.getAllPostsByUserId(id);
+  }
+
+  ////////////////////////////////////////
+
+  @Put('/:id')
+  @UseGuards(AuthGuard)
+  // chỉ có admin và người sở hữu mới có thể update
+  updatePost(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() requestBody: UpdatePostDto,
+    @CurrentUser() currentUser: User,
+  ) {
+    console.log('🚀 ~ PostController ~ currentUser:', currentUser);
+    console.log('🚀 ~ PostController ~ requestBody:', requestBody);
+    console.log('🚀 ~ PostController ~ id:', id);
+    return this.postService.updatePost(id, requestBody, currentUser);
+  }
+  @Delete('/:id')
+  @UseGuards(AuthGuard)
+  deletePost(
+    @Param('id', ParseIntPipe) id: number,
+    @CurrentUser() currentUser: User,
+  ) {
+    return this.postService.deletePost(id, currentUser);
+  }
+}
+import { Exclude, Transform } from 'class-transformer';
+import { User } from 'src/user/user.entity';
+import {
+  Entity,
+  Column,
+  PrimaryGeneratedColumn,
+  CreateDateColumn,
+  UpdateDateColumn,
+  DeleteDateColumn,
+  ManyToOne,
+  OneToMany,
+} from 'typeorm';
+import { Comment } from '../comment/comment.entity';
+
+@Entity()
+export class Post {
+  @PrimaryGeneratedColumn()
+  id: number;
+  @Column()
+  title: string;
+
+  @Column()
+  description: string;
+
+  @Column()
+  @CreateDateColumn()
+  created_at: Date; // Creation date
+
+  @UpdateDateColumn()
+  updated_at: Date; // Last updated date
+
+  @ManyToOne(() => User, (user) => user.id, { eager: true })
+  user: User;
+
+  @OneToMany(() => Comment, (comment) => comment.post)
+  comments: Comment[];
+}
+import { Module } from '@nestjs/common';
+import { TypeOrmModule } from '@nestjs/typeorm';
+import { Post } from './post.entity';
+import { PostService } from './post.service';
+import { PostController } from './post.controller';
+import { UserService } from 'src/user/user.service';
+import { User } from 'src/user/user.entity';
+
+@Module({
+  imports: [TypeOrmModule.forFeature([Post, User])],
+  providers: [PostService, UserService],
+  controllers: [PostController],
+})
+export class PostModule {}
+import { Test, TestingModule } from '@nestjs/testing';
+import { PostService } from './post.service';
+
+describe('PostService', () => {
+  let service: PostService;
+
+  beforeEach(async () => {
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [PostService],
+    }).compile();
+
+    service = module.get<PostService>(PostService);
+  });
+
+  it('should be defined', () => {
+    expect(service).toBeDefined();
+  });
+});
+import {
+  Injectable,
+  NotFoundException,
+  BadRequestException,
+} from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Post } from './post.entity';
+import { Not, Repository, DataSource } from 'typeorm';
+import { get, request } from 'http';
+import { CreatePostDto } from './dto/createPost.dto';
+import { User } from 'src/user/user.entity';
+import { UpdatePostDto } from './dto/updatePost.dto';
+import { Permission } from 'src/helper/checkPermission.helper';
+import { SelectPostDto } from './dto/select-post.dto';
+@Injectable()
+export class PostService {
+  constructor(
+    @InjectRepository(Post)
+    private postsRepository: Repository<Post>,
+    private dataSource: DataSource,
+  ) {}
+  createPost(requestBody: CreatePostDto, currentUser: User) {
+    console.log('đây là postservice');
+    const post = this.postsRepository.create(requestBody);
+    post.user = currentUser;
+    return this.postsRepository.save(post);
+  }
+  async getAllPosts() {
+    console.log('đây là get all posts');
+    const posts = await this.postsRepository.find({
+      relations: ['user'], // Lấy mối quan hệ với bảng User
+    });
+
+    return posts.map((post) => ({
+      id: post.id,
+      title: post.title,
+      description: post.description,
+      created_at: post.created_at,
+      updated_at: post.updated_at,
+      userId: post.user.id, // Thay vì trả về toàn bộ thông tin user, chỉ lấy userId
+    }));
+  }
+  async getPostById(id: number) {
+    console.log(
+      '🚀 ~11111111111111111111111 PostService ~ getPostById ~ id:',
+      id,
+    );
+    let postById = await this.postsRepository.findOneBy({ id });
+    console.log('🚀 ~ PostService ~ getPostById ~ postById:', postById);
+    if (!postById) {
+      throw new NotFoundException(`Post not found with this ${id}`);
+    }
+    return postById;
+  }
+  async getAllPostsByUserId(userId: number) {
+    console.log('đây là get all posts by user id ở post service');
+    const posts = await this.postsRepository.find({
+      where: {
+        user: {
+          id: userId,
+        },
+      },
+      relations: ['user'], // nếu bạn cần thông tin user đi kèm
+    });
+    console.log('🚀 ~ PostService ~ getAllPostsByUserId ~ posts:', posts);
+
+    if (!posts || posts.length === 0) {
+      throw new NotFoundException(`No posts found for user with id ${userId}`);
+    }
+
+    return posts;
+  }
+
+  async selectPosts(dto: SelectPostDto) {
+    let { conditions, columns } = dto;
+
+    // Parse columns nếu là string
+    if (typeof columns === 'string') {
+      try {
+        columns = JSON.parse(columns);
+      } catch (e) {
+        throw new BadRequestException('columns phải là một mảng JSON');
+      }
+    }
+
+    // Tương tự với conditions
+    const whereObj = conditions ? JSON.parse(conditions) : {};
+
+    const columnStr = columns && columns.length > 0 ? columns.join(', ') : '*';
+
+    const qb = this.dataSource
+      .createQueryBuilder()
+      .select(columnStr)
+      .from(Post, 'post');
+
+    Object.entries(whereObj).forEach(([key, value], index) => {
+      qb.andWhere(`post.${key} = :value${index}`, { [`value${index}`]: value });
+    });
+
+    return qb.getRawMany();
+  }
+
+  async updatePost(id: number, requestBody: UpdatePostDto, currentUser: User) {
+    console.log(
+      '🚀 ~ PostService ~ updatePost ~ id:--------------------------',
+      id,
+    );
+    let postById = await this.getPostById(id);
+    console.log(
+      '🚀 ~ PostService ~ updatePost ~ postById:-------------------------',
+      postById,
+    );
+
+    if (!postById) {
+      throw new NotFoundException(`Post not found with this ${id}`);
+    }
+
+    postById = { ...postById, ...requestBody };
+    Permission.checkPermission(postById.user.id, currentUser);
+    // chỉnh ở đây lấy userid so sánh có được phép cấp quyền để edit chứ eneus k có thì ai cũng có thể xóa hay edit thì k được sai logic
+
+    return this.postsRepository.save(postById);
+  }
+  async deletePost(id: number, currentUser: User) {
+    let postById = await this.getPostById(id);
+    if (!postById) {
+      throw new NotFoundException(`Post not found with this ${id}`);
+    }
+    Permission.checkPermission(postById.user.id, currentUser);
+    this.postsRepository.delete(postById.id);
+    return {
+      message: 'xóa bài post thành công',
+      deletedPost: postById,
+    };
+  }
+}
+import { BadGatewayException, Injectable, Request } from '@nestjs/common';
+import { JwtService } from '@nestjs/jwt';
+import { UserService } from './user.service';
+import { RegisterUserDto } from './dtos/registerUser.dto';
+import * as bcrypt from 'bcrypt';
+import { LoginUserDto } from './dtos/LoginUser.dto';
+import { roles } from './user.entity';
+@Injectable()
+export class AuthService {
+  constructor(
+    private jwtService: JwtService,
+
+    private UserService: UserService,
+  ) {}
+
+  // In AuthService.register method
+  async register(requestBody: RegisterUserDto) {
+    const userByEmail = await this.UserService.findByEmail(requestBody.email);
+    if (userByEmail) {
+      throw new BadGatewayException('Email already exists');
+    }
+
+    // Set default role to 'user' if not provided
+    if (!requestBody.role) {
+      requestBody.role = roles.user;
+    }
+
+    // Validate role is one of allowed values
+    const validRoles = ['admin', 'moderator', 'user'];
+    if (!validRoles.includes(requestBody.role)) {
+      throw new BadGatewayException(
+        'Invalid role. Must be admin, moderator, or user',
+      );
+    }
+
+    const hashedPassword = await bcrypt.hash(requestBody.password, 10);
+    requestBody.password = hashedPassword;
+
+    const savedUser = await this.UserService.createUserJwt(requestBody);
+
+    const payload = {
+      id: savedUser.id,
+      firstName: savedUser.firstName,
+      lastName: savedUser.lastName,
+      role: savedUser.role,
+      password: savedUser.password,
+    };
+
+    const accessToken = this.jwtService.sign(payload, {
+      secret: process.env.JWT_SECRET,
+    });
+
+    return {
+      msg: 'user has been created',
+      accessToken,
+    };
+  }
+
+  async login(requestBody: LoginUserDto) {
+    const user = await this.UserService.findByEmail(requestBody.email);
+    if (!user) {
+      throw new BadGatewayException('Email does not exist');
+    }
+    const isPasswordValid = await bcrypt.compare(
+      requestBody.password,
+      user.password,
+    );
+    if (!isPasswordValid) {
+      throw new BadGatewayException('Invalid password');
+    }
+    const payload = {
+      id: user.id,
+      email: user.email,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      role: user.role,
+    };
+    console.log('🚀 ~ AuthService ~ login ~ payload:', payload);
+    // generate token
+    const accessToken = this.jwtService.sign(payload, {
+      secret: process.env.JWT_SECRET,
+      expiresIn: '2d',
+    });
+
+    return {
+      msg: 'User has been login successfully',
+      accessToken,
+    };
+  }
+  getCurrentUser(@Request() req) {
+    console.log('đây là getCurrentUser', req.currentUser);
+    return req.currentUser;
+  }
+}
+import { createParamDecorator, ExecutionContext } from '@nestjs/common';
+
+export const CurrentUser = createParamDecorator(
+  (data: unknown, ctx: ExecutionContext) => {
+    const request = ctx.switchToHttp().getRequest();
+    return request.currentUser;
+  },
+);
+import { IsEmail, IsNotEmpty } from 'class-validator';
+
+export class CreateUserDto {
+  @IsEmail()
+  email: string;
+  @IsNotEmpty()
+  password: string;
+}
+import { IsEmail, IsNotEmpty } from 'class-validator';
+
+export class LoginUserDto {
+  @IsEmail()
+  email: string;
+
+  @IsNotEmpty()
+  password: string;
+}
+import { IsEmail, IsNotEmpty, IsEnum, IsOptional } from 'class-validator';
+import { roles } from '../user.entity';
+
+export class RegisterUserDto {
+  @IsEmail()
+  email: string;
+
+  @IsNotEmpty()
+  firstName: string;
+
+  @IsNotEmpty()
+  lastName: string;
+
+  @IsNotEmpty()
+  password: string;
+
+  @IsOptional() // Make role optional
+  @IsEnum(roles, { message: 'Role phải là admin, user hoặc moderator' })
+  role?: roles; // Use ? to indicate it's optional
+}
+export class SelectUserDto {
+    conditions?: string; // JSON.stringify object điều kiện
+    columns?: string[]; // danh sách cột muốn lấy
+  }
+  import { IsEmail, IsNotEmpty, IsEnum } from 'class-validator';
+import { roles } from '../user.entity';
+
+export class UpdateUserDto {
+  @IsEmail()
+  email: string;
+  @IsNotEmpty()
+  firstName: string;
+  @IsNotEmpty()
+  lastName: string;
+
+  @IsNotEmpty()
+  password: string;
+  @IsEnum(roles, { message: 'Role phải là admin, user hoặc moderator' })
+  role: roles;
+}
+import {
+  Injectable,
+  CanActivate,
+  ExecutionContext,
+  ForbiddenException,
+  BadGatewayException,
+  UnauthorizedException,
+} from '@nestjs/common';
+import { Observable } from 'rxjs';
+import { JwtService } from '@nestjs/jwt';
+import { UserService } from './../user.service';
+
+@Injectable()
+export class AuthGuard implements CanActivate {
+  constructor(
+    private JwtService: JwtService,
+    private UserService: UserService,
+  ) {}
+  async canActivate(context: ExecutionContext): Promise<boolean> {
+    console.log('đây là authguard');
+    const request = context.switchToHttp().getRequest();
+    // return validateRequest(request);
+    try {
+      // lấy token từ header
+      const token = request.headers.authorization.split(' ')[1];
+      console.log('🚀 ~ AuthGuard ~ token:111111:', token);
+      if (!token) {
+        throw new ForbiddenException('Please provide access token');
+      }
+
+      //2  jwtverify validation token kiểm tra token hợp lệ không
+      const palyload = await this.JwtService.verifyAsync(token, {
+        secret: process.env.JWT_SECRET,
+      });
+      console.log('🚀 ~ AuthGuard ~ canActivate ~ palyload:', palyload);
+      //3 find user by email sử dụng trong auth service
+      const user = await this.UserService.findByEmail(palyload.email);
+      console.log(
+        '🚀 ~ AuthGuard ~ canActivate ~ user:222222222222222222222',
+        user,
+      );
+      if (!user) {
+        throw new BadGatewayException('Email does not exist');
+      }
+      //4 assign user to request object
+      request.currentUser = user;
+      return true;
+    } catch (error) {
+      console.log('🚀 ~ AuthGuard ~ canActivate ~ error:', error);
+      throw new BadGatewayException('Invalid token or expired token');
+    }
+  }
+}
+import {
+  Injectable,
+  CanActivate,
+  ExecutionContext,
+  ForbiddenException,
+} from '@nestjs/common';
+import { Observable } from 'rxjs';
+import { CurrentUser } from './../decorate/user.decorator';
+import { request } from 'http';
+
+@Injectable()
+export class RoleGuard implements CanActivate {
+  constructor(private roles: string[]) {}
+
+  canActivate(
+    context: ExecutionContext,
+  ): boolean | Promise<boolean> | Observable<boolean> {
+    console.log('------22222222222');
+    const request = context.switchToHttp().getRequest();
+    const user = request.currentUser;
+    console.log('🚀 ~ RoleGuard ~ user:----------------', user.role);
+    console.log('🚀 ~ RoleGuard ~ this.roles:------------------', this.roles);
+    if (!user) {
+      throw new ForbiddenException(' bạn chưa đăng nhập');
+    }
+    if (!this.roles.includes(user.role.toLowerCase())) {
+      throw new ForbiddenException(
+        'You do not have permission to access this resource',
+      );
+    }
+    return true;
+  }
+}
+import {
+  Injectable,
+  NestInterceptor,
+  ExecutionContext,
+  CallHandler,
+} from '@nestjs/common';
+import { Observable } from 'rxjs';
+import { tap } from 'rxjs/operators';
+
+@Injectable()
+export class LoggingInterceptor implements NestInterceptor {
+  intercept(context: ExecutionContext, next: CallHandler): Observable<any> {
+    console.log('Before interceptors...');
+
+    const now = Date.now();
+    return next
+      .handle()
+      .pipe(
+        tap(() => console.log(`After.. interceptor. ${Date.now() - now}ms`)),
+      );
+  }
+}
+import { Injectable, NestMiddleware } from '@nestjs/common';
+import { Request, Response, NextFunction } from 'express';
+
+@Injectable()
+export class LoggerMiddleware implements NestMiddleware {
+  use(req: Request, res: Response, next: NextFunction) {
+    console.log('đây là middleware');
+    next();
+  }
+}
+import {
+  Body,
+  ClassSerializerInterceptor,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  ParseIntPipe,
+  Post,
+  Put,
+  Query,
+  UseInterceptors,
+  UsePipes,
+  ValidationPipe,
+  UseGuards,
+  Request,
+} from '@nestjs/common';
+import { UserService } from './user.service';
+import { CreateUserDto } from './dtos/createUser.dto';
+import { UpdateUserDto } from './dtos/updateUser.dto';
+import { LoggingInterceptor } from './interceptors/logging.interceptor';
+import { AuthGuard } from './guards/auth.guard';
+import { RegisterUserDto } from './dtos/registerUser.dto';
+import { AuthService } from './auth.service';
+import { LoginUserDto } from './dtos/LoginUser.dto';
+import { CurrentUser } from './decorate/user.decorator';
+import { RoleGuard } from './guards/role.auth';
+import { User } from './user.entity';
+import { SelectUserDto } from './dtos/SelectUser.dto';
+@UseInterceptors(ClassSerializerInterceptor)
+@UseInterceptors(LoggingInterceptor)
+@Controller('user')
+@UsePipes(new ValidationPipe())
+export class UserController {
+  constructor(
+    private readonly UserService: UserService,
+
+    private readonly AuthService: AuthService,
+  ) {}
+
+  @Post('')
+  createUser(@Body() requestBody: CreateUserDto) {
+    console.log('🚀 ~ UserController ~ createUser ~ requestBody:', requestBody);
+    console.log('đây là usercontroller2');
+    return this.UserService.createUser(requestBody);
+  }
+  @Get('/curent-user')
+  @UseGuards(AuthGuard)
+  getCurrentUser(@CurrentUser() currentUser) {
+    return currentUser;
+  }
+
+  @Get('')
+  @UseGuards(new RoleGuard(['admin', 'user']))
+  @UseGuards(AuthGuard)
+  getAllUser() {
+    console.log('đây là getAllUser');
+    return this.UserService.findAll();
+  }
+  @Get('role1')
+  async getAllUsersByRole() {
+    return await this.UserService.getAllUsersByRole();
+  }
+  @UseGuards(new RoleGuard(['admin']))
+  @Get('/select')
+  @UseGuards(AuthGuard)
+  async selectPost(@Query() dto: SelectUserDto) {
+    return this.UserService.selectUser(dto);
+  }
+
+  @Get('/:id')
+  @UseGuards(AuthGuard)
+  getUserById(@Param('id', ParseIntPipe) id: number) {
+    console.log(typeof id);
+    console.log('🚀 ~ UserController ~ getUserById ~ id:', id);
+    return this.UserService.findById(id);
+  }
+  @Put('/:id')
+  @UseGuards(new RoleGuard(['admin', 'user', 'moderator']))
+  @UseGuards(AuthGuard)
+  updateUserById(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() requestBody: UpdateUserDto,
+    @CurrentUser() currentUser: User,
+  ) {
+    console.log(typeof id);
+    console.log(typeof requestBody);
+    return this.UserService.updateById(id, requestBody, currentUser);
+  }
+  @Delete('/:id')
+  @UseGuards(new RoleGuard(['admin', 'user', 'moderator']))
+  @UseGuards(AuthGuard)
+  deleteUserById(@Param('id') id: number) {
+    console.log('🚀 ~ UserController ~ deleteUserById ~ id:', id);
+    return this.UserService.deleteById(id);
+  }
+  @Post('/register')
+  registerUser(@Body() requestBody: RegisterUserDto) {
+    console.log('đây là usercontroller2221');
+    return this.AuthService.register(requestBody);
+  }
+  @Post('/login')
+  loginUser(@Body() requestBody: LoginUserDto) {
+    console.log('đây là usercontroller2221');
+    return this.AuthService.login(requestBody);
+  }
+}
+import { Exclude } from 'class-transformer';
+import { Post } from 'src/post/post.entity';
+import { Entity, Column, PrimaryGeneratedColumn, OneToMany } from 'typeorm';
+import { Comment } from '../comment/comment.entity';
+
+export enum roles {
+  admin = 'admin',
+  user = 'user',
+  moderator = 'moderator',
+}
+@Entity()
+// file user.entity.ts có chức năng tạo table user
+//  định nghĩa các trường và dạng của các trường number
+// hay string hay email password
+export class User {
+  @PrimaryGeneratedColumn()
+  id: number;
+
+  @Column()
+  email: string;
+
+  @Column()
+  firstName: string;
+
+  @Column()
+  lastName: string;
+
+  @Exclude()
+  @Column({ default: roles.user })
+  role: roles;
+
+  @Exclude()
+  @Column()
+  password: string;
+  @OneToMany(
+    () => Post,
+    (post) => {
+      console.log('🚀 ~ User ~ post:1111111', post.user);
+      return post.user;
+    },
+  )
+  posts: Post[];
+  @OneToMany(() => Comment, (comment) => comment.user)
+  comments: Comment[];
+}
+import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
+import { TypeOrmModule } from '@nestjs/typeorm';
+// import { UsersService } from './users.service';
+// import { UsersController } from './users.controller';
+import { User } from './user.entity';
+import { UserService } from './user.service';
+import { UserController } from './user.controller';
+import { LoggerMiddleware } from './middleware/logger.middleware';
+import { AuthService } from './auth.service';
+import { JwtService } from '@nestjs/jwt';
+import { JwtModule } from '@nestjs/jwt';
+
+@Module({
+  imports: [
+    TypeOrmModule.forFeature([User]),
+    JwtModule.register({
+      global: true,
+    }),
+  ],
+  providers: [UserService, AuthService, JwtService],
+  controllers: [UserController],
+  exports: [UserService],
+})
+export class UserModule implements NestModule {
+  configure(consumer: MiddlewareConsumer) {
+    consumer.apply(LoggerMiddleware).forRoutes(UserController);
+  }
+}
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { User } from './user.entity';
+import { roles } from './user.entity';
+import { Not, Repository, DataSource } from 'typeorm';
+import { CreateUserDto } from './dtos/createUser.dto';
+import { UpdateUserDto } from './dtos/updateUser.dto';
+import { RegisterUserDto } from './dtos/registerUser.dto';
+import * as bcrypt from 'bcrypt';
+import { Permission } from 'src/helper/checkPermission.helper';
+import { SelectUserDto } from './dtos/SelectUser.dto';
+@Injectable()
+export class UserService {
+  constructor(
+    @InjectRepository(User)
+    private usersRepository: Repository<User>,
+    private dataSource: DataSource,
+  ) {}
+  getUser() {
+    console.log('đây là userservice2');
+    return 'đây là userservice3';
+  }
+  async getAllUsersByRole(): Promise<any[]> {
+    const result = await this.dataSource.query(
+      'SELECT get_all_users_by_role() AS users;',
+    );
+
+    // lấy giá trị
+    const users = result[0].users;
+
+    // nếu users là string thì parse, nếu là object thì trả luôn
+    if (typeof users === 'string') {
+      return JSON.parse(users);
+    }
+
+    return users; // là object thật thì trả về luôn
+  }
+
+  createUser(requestBody: CreateUserDto) {
+    console.log('đây là userservice2221');
+    return this.usersRepository.save(requestBody);
+  }
+  createUserJwt(requestBody: RegisterUserDto) {
+    console.log('đây là userservice2221');
+    return this.usersRepository.save(requestBody);
+  }
+  findAll() {
+    console.log('đây là find all tất cả value');
+    return this.usersRepository.find();
+  }
+  async findAllByAdmin() {
+    const users = await this.usersRepository.find({
+      where: { role: roles.user },
+    });
+
+    console.log('đây là find all tất cả value', users.length);
+
+    return users;
+  }
+
+  async findById(id: number) {
+    const user = await this.usersRepository.findOneBy({ id });
+    console.log('🚀 ~ UserService ~ findById ~ user:', user);
+    if (!user) {
+      throw new NotFoundException('User does not exist');
+    }
+    return user;
+  }
+
+  async updateById(id: number, requestBody: UpdateUserDto, currentUser: User) {
+    let user = await this.usersRepository.findOneBy({ id });
+    console.log('🚀 ~ UserService ~ updateById ~ user:', user);
+
+    if (!user) {
+      throw new NotFoundException('User does not exist');
+    }
+
+    Permission.checkPermission(id, currentUser);
+    const hashedPassword = await bcrypt.hash(requestBody.password, 10);
+    requestBody.password = hashedPassword;
+    // Cập nhật user trong database
+    const dataUpdate = await this.usersRepository.update(id, requestBody);
+
+    // Trả về thông tin cần thiết
+    return {
+      firstName: requestBody.firstName,
+      lastName: requestBody.lastName,
+      email: requestBody.email,
+      role: requestBody.role,
+      password: requestBody.password,
+    };
+  }
+
+  async deleteById(id: number) {
+    console.log('đây là delete');
+    let user = await this.usersRepository.findOneBy({ id });
+
+    if (!user) {
+      throw new NotFoundException('User does not exist');
+    }
+
+    return this.usersRepository.remove(user);
+  }
+  async findByEmail(email: string) {
+    console.log('🚀 ~ UserService ~ findOneByEmail ~ email:', email);
+    return this.usersRepository.findOneBy({ email });
+  }
+
+  async selectUser(dto: SelectUserDto) {
+    let { conditions, columns } = dto;
+    console.log('🚀 ~ UserService ~ selectUser ~ dto:', dto);
+
+    // Parse columns nếu là string
+    if (typeof columns === 'string') {
+      try {
+        columns = JSON.parse(columns);
+      } catch (e) {
+        throw new BadRequestException('columns phải là một mảng JSON');
+      }
+    }
+
+    // Tương tự với conditions
+    const whereObj = conditions ? JSON.parse(conditions) : {};
+
+    const columnStr = columns && columns.length > 0 ? columns.join(', ') : '*';
+
+    const qb = this.dataSource
+      .createQueryBuilder()
+      .select(columnStr)
+      .from(User, 'user');
+
+    Object.entries(whereObj).forEach(([key, value], index) => {
+      qb.andWhere(`user.${key} = :value${index}`, { [`value${index}`]: value });
+    });
+
+    return qb.getRawMany();
+  }
+}
